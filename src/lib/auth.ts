@@ -1,5 +1,6 @@
-import prisma from "@/lib/db";
-import { PrismaAdapter } from "@auth/prisma-adapter";
+import { db } from "@/lib/db";
+import { sessions, users } from "@/schema";
+import { DrizzleAdapter } from "@auth/drizzle-adapter";
 import { compare, genSalt, hash } from "bcrypt";
 import { NextAuthOptions } from "next-auth";
 import { Adapter } from "next-auth/adapters";
@@ -14,7 +15,7 @@ async function hashAndSaltPassword(password: string, saltRounds = 10) {
 }
 
 export const authOptions: NextAuthOptions = {
-  adapter: PrismaAdapter(prisma) as Adapter, // this cast is required to prevent type errors, see https://github.com/nextauthjs/next-auth/issues/6106
+  adapter: DrizzleAdapter(db) as Adapter, // this cast is required to prevent type errors, see https://github.com/nextauthjs/next-auth/issues/6106
   providers: [
     GitHubProvider({
       clientId: process.env.GITHUB_CLIENT_ID!,
@@ -35,18 +36,19 @@ export const authOptions: NextAuthOptions = {
           return null;
         }
 
-        let user = await prisma.user.findFirst({
-          where: {
-            name: credentials.username,
-          },
+        let user = await db.query.users.findFirst({
+          where: (users, { eq }) => eq(users.name, credentials.username),
         });
         if (!user) {
-          user = await prisma.user.create({
-            data: {
+          const [newUser] = await db
+            .insert(users)
+            .values({
               name: credentials.username,
               password: await hashAndSaltPassword(credentials.password),
-            },
-          });
+            } as typeof users.$inferInsert)
+            .returning();
+
+          user = newUser;
         }
 
         if (!user.password) {
@@ -82,12 +84,10 @@ export const authOptions: NextAuthOptions = {
       const token = require("crypto").randomBytes(32).toString("hex");
 
       // Create a session in our database
-      await prisma.session.create({
-        data: {
-          sessionToken: token,
-          userId: user.id,
-          expires: expireAt,
-        },
+      await db.insert(sessions).values({
+        sessionToken: token,
+        userId: user.id,
+        expires: expireAt,
       });
 
       // Set our cookie
